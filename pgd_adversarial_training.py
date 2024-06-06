@@ -8,6 +8,9 @@ import torchvision
 import torchvision.transforms as transforms
 
 import os
+import time
+
+from tqdm.auto import tqdm
 
 from models import *
 
@@ -17,7 +20,10 @@ k = 7
 alpha = 0.00784
 file_name = 'pgd_adversarial_training'
 
+# CUDA agnostic code
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# Macbook device agnostic code
+# device = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 transform_train = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
@@ -39,21 +45,25 @@ class LinfPGDAttack(object):
     def __init__(self, model):
         self.model = model
 
-    def perturb(self, x_natural, y):
-        x = x_natural.detach()
+    def perturb(self, x_natural, y):  # Perturb - make someone unsettled or anxious
+        # Here, care is taken the gradients do not propogate back to x_natural
+        x = x_natural.detach() 
         x = x + torch.zeros_like(x).uniform_(-epsilon, epsilon)
         for i in range(k):
             x.requires_grad_()
             with torch.enable_grad():
                 logits = self.model(x)
                 loss = F.cross_entropy(logits, y)
-            grad = torch.autograd.grad(loss, [x])[0]
+            grad = torch.autograd.grad(loss, [x])[0] 
+            print(grad)
+            # Note that only the sign is being coonsidered here.
             x = x.detach() + alpha * torch.sign(grad.detach())
             x = torch.min(torch.max(x, x_natural - epsilon), x_natural + epsilon)
             x = torch.clamp(x, 0, 1)
         return x
 
-def attack(x, y, model, adversary):
+# Function where adversarial examples are created 
+def attack(x, y, model, adversary):  
     model_copied = copy.deepcopy(model)
     model_copied.eval()
     adversary.model = model_copied
@@ -79,14 +89,17 @@ def train(epoch):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
 
+        # 
         adv = adversary.perturb(inputs, targets)
         adv_outputs = net(adv)
         loss = criterion(adv_outputs, targets)
         loss.backward()
 
         optimizer.step()
+        # coverts tensor to python number
         train_loss += loss.item()
-        _, predicted = adv_outputs.max(1)
+        # We're interested in the indices where the max value is present along the 1st dimension (along classes)
+        _, predicted = adv_outputs.max(1)  
 
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
@@ -112,11 +125,11 @@ def test(epoch):
             inputs, targets = inputs.to(device), targets.to(device)
             total += targets.size(0)
 
-            outputs = net(inputs)
-            loss = criterion(outputs, targets)
+            benign_outputs = net(inputs)
+            loss = criterion(benign_outputs, targets)
             benign_loss += loss.item()
 
-            _, predicted = outputs.max(1)
+            _, predicted = benign_outputs.max(1)
             benign_correct += predicted.eq(targets).sum().item()
 
             if batch_idx % 10 == 0:
@@ -157,8 +170,14 @@ def adjust_learning_rate(optimizer, epoch):
         lr /= 10
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+        
+start_time = time.time()
 
-for epoch in range(0, 200):
+for epoch in tqdm(range(0,200)):
     adjust_learning_rate(optimizer, epoch)
     train(epoch)
     test(epoch)
+
+end_time = time.time() - start_time
+
+print(f"Time taken for 200 epochs = {end_time/3600} hours")

@@ -8,6 +8,9 @@ import torchvision
 import torchvision.transforms as transforms
 
 import os
+import time
+
+from tqdm.auto import tqdm
 
 from models import *
 
@@ -17,7 +20,10 @@ k = 7
 alpha = 0.00784
 file_name = 'basic_training'
 
+# CUDA agnostic code
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# Macbook device agnostic code
+# device = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 transform_train = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
@@ -39,7 +45,8 @@ class LinfPGDAttack(object):
     def __init__(self, model):
         self.model = model
 
-    def perturb(self, x_natural, y):
+    def perturb(self, x_natural, y):  # Perturb - make someone unsettled or anxious
+        # Here, care is taken the gradients do not propogate back to x_natural
         x = x_natural.detach()
         x = x + torch.zeros_like(x).uniform_(-epsilon, epsilon)
         for i in range(k):
@@ -48,6 +55,7 @@ class LinfPGDAttack(object):
                 logits = self.model(x)
                 loss = F.cross_entropy(logits, y)
             grad = torch.autograd.grad(loss, [x])[0]
+            # Note that only the sign is being coonsidered here.
             x = x.detach() + alpha * torch.sign(grad.detach())
             x = torch.min(torch.max(x, x_natural - epsilon), x_natural + epsilon)
             x = torch.clamp(x, 0, 1)
@@ -79,7 +87,7 @@ def train(epoch):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
 
-        benign_outputs = net(inputs)
+        benign_outputs = net(inputs)  # Benign - harmless/kind
         loss = criterion(benign_outputs, targets)
         loss.backward()
 
@@ -157,7 +165,13 @@ def adjust_learning_rate(optimizer, epoch):
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-for epoch in range(0, 200):
+start_time = time.time()
+
+for epoch in tqdm(range(0, 200)):
     adjust_learning_rate(optimizer, epoch)
     train(epoch)
     test(epoch)
+
+end_time = time.time() - start_time
+
+print(f"Time taken for 200 epochs = {end_time/3600} hours")
